@@ -1,0 +1,67 @@
+# Single cloud VPS deployment (Architecture section 9).
+# PostgreSQL has NO published port and lives on a private network; only Caddy is public.
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-ue}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-unique_empire}
+    command:
+      - postgres
+      - -c
+      - wal_level=replica
+      - -c
+      - archive_mode=on
+      # WAL archiving -> recovery points of minutes (RPO <= 5 min). ./backup MUST be synced to storage
+      # separate from this VPS (see README "Backups").
+      - -c
+      - archive_command=test ! -f /backup/wal/%f && cp %p /backup/wal/%f
+      - -c
+      - archive_timeout=300
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./backup:/backup
+    networks: [private]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-ue} -d $${POSTGRES_DB:-unique_empire}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./backup:/backup   # restoration log lives here (outside the database volume)
+    networks: [private, edge]
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN:-localhost}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./frontend-dist:/srv:ro      # built React PWA
+      - caddy_data:/data
+    depends_on: [api]
+    networks: [edge]
+
+networks:
+  private:
+    internal: true   # the database cannot reach, or be reached from, the internet
+  edge: {}
+
+volumes:
+  pgdata:
+  caddy_data:
