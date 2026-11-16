@@ -6,13 +6,31 @@ import { api } from "@/api/client"
 import { useAction, useOnline } from "@/api/hooks"
 import { useAuth } from "@/auth/AuthContext"
 import { Badge, Banner, Button, Card, Empty, Field, Input, Modal, Pager, Segmented, Skeleton, Textarea } from "@/components/kit"
-import { fmtDateTime } from "@/lib/dates"
-import { formatNaira, money } from "@/lib/money"
+import { fmtBusinessDate, fmtDateTime, lagosYmd } from "@/lib/dates";
+import { decimalToKobo, formatNaira, money } from "@/lib/money";
 import { qs } from "@/lib/utils"
 import { useOutbox } from "@/offline/useOutbox"
 
 const STATUS = { COMPLETED: ["ok", "Completed"], VOIDED: ["bad", "Voided"], DRAFT: ["neutral", "Draft"] }
 const METHOD = { CASH: "Cash", TRANSFER: "Transfer", POS: "POS" }
+
+// Sales arrive newest first, so each day's sales are already side by side.
+function groupByDay(sales) {
+  const groups = []
+  for (const sale of sales) {
+    const ymd = lagosYmd(new Date(sale.occurred_at))
+    const last = groups[groups.length - 1]
+    if (last?.ymd === ymd) last.sales.push(sale)
+    else groups.push({ ymd, sales: [sale] })
+  }
+  return groups
+}
+
+function dayLabel(ymd) {
+  if (ymd === lagosYmd()) return "Today"
+  if (ymd === lagosYmd(new Date(Date.now() - 86_400_000))) return "Yesterday"
+  return fmtBusinessDate(ymd)
+}
 
 export default function SalesHistory() {
   const online = useOnline()
@@ -27,7 +45,7 @@ export default function SalesHistory() {
 
   const q = useQuery({
     queryKey: ["sales", reference, status, from, to, page],
-    queryFn: () => api(`/sales${qs({ reference, status, date_from: from, date_to: to, page, page_size: 20 })}`),
+    queryFn: () => api(`/sales${qs({ reference, status, date_from: from, date_to: to, page, page_size: 50 })}`),
     enabled: online,
     placeholderData: (prev) => prev,
   })
@@ -36,77 +54,236 @@ export default function SalesHistory() {
   return (
     <div className="space-y-5">
       <div>
-        <h1 className="font-display text-2xl font-semibold sm:text-3xl">Sales</h1>
-        <p className="mt-1 text-sm text-ink-soft">Search completed, voided and saved sales.</p>
+        <h1 className="font-display text-2xl font-semibold sm:text-3xl">
+          Sales
+        </h1>
+        <p className="mt-1 text-sm text-ink-soft">
+          Search completed, voided and saved sales.
+        </p>
       </div>
 
       {onDevice.length > 0 && (
         <section aria-label="Saved on this device" className="space-y-2">
-          <h2 className="font-display text-lg font-semibold">Saved on this device</h2>
+          <h2 className="font-display text-lg font-semibold">
+            Saved on this device
+          </h2>
           {onDevice.map((r) => {
-            const tone = r.status === "pending" ? ["butter", "Waiting to sync"] : r.status === "conflict" ? ["warn", "Held for review"] : ["bad", "Rejected"]
+            const tone =
+              r.status === "pending"
+                ? ["butter", "Waiting to sync"]
+                : r.status === "conflict"
+                  ? ["warn", "Held for review"]
+                  : ["bad", "Rejected"];
             return (
-              <Card key={r.id} className="flex flex-wrap items-center justify-between gap-3 p-4">
+              <Card
+                key={r.id}
+                className="flex flex-wrap items-center justify-between gap-3 p-4"
+              >
                 <div className="min-w-0">
-                  <p className="font-semibold">{r.summary.reference || r.summary.label} <Badge tone={tone[0]} className="ml-1">{tone[1]}</Badge></p>
-                  {r.detail && <p className="mt-1 text-sm text-ink-soft">{r.detail}</p>}
-                  {r.status === "conflict" && <p className="mt-1 text-xs text-ink-soft">The owner or manager will decide where this sale belongs. Nothing is lost.</p>}
+                  <p className="font-semibold">
+                    {r.summary.reference || r.summary.label}{" "}
+                    <Badge tone={tone[0]} className="ml-1">
+                      {tone[1]}
+                    </Badge>
+                  </p>
+                  {r.detail && (
+                    <p className="mt-1 text-sm text-ink-soft">{r.detail}</p>
+                  )}
+                  {r.status === "conflict" && (
+                    <p className="mt-1 text-xs text-ink-soft">
+                      The owner or manager will decide where this sale belongs.
+                      Nothing is lost.
+                    </p>
+                  )}
                 </div>
                 <div className="flex items-center gap-2">
-                  <span className="num font-display text-lg font-semibold">{formatNaira(r.summary.amountKobo || 0)}</span>
-                  {r.status === "failed" && <Button size="sm" variant="outline" onClick={() => dismiss(r.id)}>Dismiss</Button>}
-                  {r.status === "pending" && <CloudUpload className="size-5 text-ink-soft" aria-hidden />}
+                  <span className="num font-display text-lg font-semibold">
+                    {formatNaira(r.summary.amountKobo || 0)}
+                  </span>
+                  {r.status === "failed" && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => dismiss(r.id)}
+                    >
+                      Dismiss
+                    </Button>
+                  )}
+                  {r.status === "pending" && (
+                    <CloudUpload className="size-5 text-ink-soft" aria-hidden />
+                  )}
                 </div>
               </Card>
-            )
+            );
           })}
         </section>
       )}
 
       {!online ? (
-        <Banner tone="warn" title="Sales history needs a connection">Reconnect to search past sales. Sales you made offline are listed above.</Banner>
+        <Banner tone="warn" title="Sales history needs a connection">
+          Reconnect to search past sales. Sales you made offline are listed
+          above.
+        </Banner>
       ) : (
         <>
           <Card className="space-y-3 p-4">
             <div className="relative">
-              <Search className="pointer-events-none absolute left-3.5 top-3.5 size-5 text-ink-soft" aria-hidden />
-              <Input value={search} onChange={(e) => { setSearch(e.target.value); setPage(1) }} placeholder="Search by reference, for example UE-A1" className="pl-11" aria-label="Search by reference" />
+              <Search
+                className="pointer-events-none absolute left-3.5 top-3.5 size-5 text-ink-soft"
+                aria-hidden
+              />
+              <Input
+                value={search}
+                onChange={(e) => {
+                  setSearch(e.target.value);
+                  setPage(1);
+                }}
+                placeholder="Search by reference, for example UE-A1"
+                className="pl-11"
+                aria-label="Search by reference"
+              />
             </div>
             <div className="flex flex-wrap items-end gap-3">
-              <Segmented value={status} onChange={(v) => { setStatus(v); setPage(1) }} options={[{ value: "ALL", label: "All" }, { value: "COMPLETED", label: "Completed" }, { value: "VOIDED", label: "Voided" }, { value: "DRAFT", label: "Drafts" }]} />
-              <Field label="From" htmlFor="f"><Input id="f" type="date" value={from} onChange={(e) => { setFrom(e.target.value); setPage(1) }} className="w-40" /></Field>
-              <Field label="To" htmlFor="t"><Input id="t" type="date" value={to} onChange={(e) => { setTo(e.target.value); setPage(1) }} className="w-40" /></Field>
+              <Segmented
+                value={status}
+                onChange={(v) => {
+                  setStatus(v);
+                  setPage(1);
+                }}
+                options={[
+                  { value: "ALL", label: "All" },
+                  { value: "COMPLETED", label: "Completed" },
+                  { value: "VOIDED", label: "Voided" },
+                  { value: "DRAFT", label: "Drafts" },
+                ]}
+              />
+              <Field label="From" htmlFor="f">
+                <Input
+                  id="f"
+                  type="date"
+                  value={from}
+                  onChange={(e) => {
+                    setFrom(e.target.value);
+                    setPage(1);
+                  }}
+                  className="w-40"
+                />
+              </Field>
+              <Field label="To" htmlFor="t">
+                <Input
+                  id="t"
+                  type="date"
+                  value={to}
+                  onChange={(e) => {
+                    setTo(e.target.value);
+                    setPage(1);
+                  }}
+                  className="w-40"
+                />
+              </Field>
             </div>
           </Card>
 
           {q.isPending && <Skeleton className="h-56" />}
-          {q.error && <Banner tone="bad" title="Can't load sales">{q.error.message}</Banner>}
-          {q.data && (q.data.items.length === 0 ? (
-            <Card><Empty icon={Receipt} title="No sales found">Try a different search, date or status.</Empty></Card>
-          ) : (
-            <>
-              <ul className="space-y-2">
-                {q.data.items.map((s) => (
-                  <li key={s.id}>
-                    <button onClick={() => setOpenId(s.id)} className="flex w-full items-center justify-between gap-3 rounded-2xl border border-line bg-surface p-4 text-left transition-colors hover:bg-ground">
-                      <div className="min-w-0">
-                        <p className="font-semibold">{s.reference} <Badge tone={STATUS[s.status][0]} className="ml-1">{STATUS[s.status][1]}</Badge></p>
-                        <p className="mt-0.5 truncate text-sm text-ink-soft">{s.items.map((i) => `${i.quantity} × ${i.product_name}`).join(", ")}</p>
-                        <p className="mt-0.5 text-xs text-ink-soft">{s.staff_name}, {fmtDateTime(s.occurred_at)}</p>
-                      </div>
-                      <span className={`num font-display text-xl font-semibold ${s.status === "VOIDED" ? "text-ink-soft line-through" : ""}`}>{money(s.total_amount)}</span>
-                    </button>
-                  </li>
-                ))}
-              </ul>
-              <Pager page={page} pageSize={20} total={q.data.total} onPage={setPage} />
-            </>
-          ))}
+          {q.error && (
+            <Banner tone="bad" title="Can't load sales">
+              {q.error.message}
+            </Banner>
+          )}
+          {q.data &&
+            (q.data.items.length === 0 ? (
+              <Card>
+                <Empty icon={Receipt} title="No sales found">
+                  Try a different search, date or status.
+                </Empty>
+              </Card>
+            ) : (
+              <>
+                <div className="space-y-8">
+                  {groupByDay(q.data.items).map((g) => {
+                    const today = g.ymd === lagosYmd();
+                    const completed = g.sales.filter(
+                      (x) => x.status === "COMPLETED",
+                    );
+                    const total = completed.reduce(
+                      (sum, x) => sum + decimalToKobo(x.total_amount),
+                      0,
+                    );
+                    return (
+                      <section key={g.ymd} aria-label={dayLabel(g.ymd)}>
+                        <div
+                          className={`mb-3 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 border-b-2 pb-2 ${today ? "border-brand" : "border-ink/20"}`}
+                        >
+                          <h2
+                            className={`font-display text-xl font-semibold ${today ? "text-brand" : ""}`}
+                          >
+                            {dayLabel(g.ymd)}
+                          </h2>
+                          <p className="num text-sm text-ink-soft">
+                            {g.sales.length}{" "}
+                            {g.sales.length === 1 ? "sale" : "sales"}
+                            {completed.length > 0 && (
+                              <span className="font-semibold text-ink">
+                                , {formatNaira(total)}
+                              </span>
+                            )}
+                          </p>
+                        </div>
+                        <ul className="space-y-2">
+                          {g.sales.map((s) => (
+                            <li key={s.id}>
+                              <button
+                                onClick={() => setOpenId(s.id)}
+                                className="flex w-full items-center justify-between gap-3 rounded-2xl border border-line bg-surface p-4 text-left transition-colors hover:bg-ground"
+                              >
+                                <div className="min-w-0">
+                                  <p className="font-semibold">
+                                    {s.reference}{" "}
+                                    <Badge
+                                      tone={STATUS[s.status][0]}
+                                      className="ml-1"
+                                    >
+                                      {STATUS[s.status][1]}
+                                    </Badge>
+                                  </p>
+                                  <p className="mt-0.5 truncate text-sm text-ink-soft">
+                                    {s.items
+                                      .map(
+                                        (i) =>
+                                          `${i.quantity} × ${i.product_name}`,
+                                      )
+                                      .join(", ")}
+                                  </p>
+                                  <p className="mt-0.5 text-xs text-ink-soft">
+                                    {s.staff_name}, {fmtDateTime(s.occurred_at)}
+                                  </p>
+                                </div>
+                                <span
+                                  className={`num font-display text-xl font-semibold ${s.status === "VOIDED" ? "text-ink-soft line-through" : ""}`}
+                                >
+                                  {money(s.total_amount)}
+                                </span>
+                              </button>
+                            </li>
+                          ))}
+                        </ul>
+                      </section>
+                    );
+                  })}
+                </div>
+                <Pager
+                  page={page}
+                  pageSize={50}
+                  total={q.data.total}
+                  onPage={setPage}
+                />
+              </>
+            ))}
         </>
       )}
       <SaleDetail id={openId} onClose={() => setOpenId(null)} />
     </div>
-  )
+  );
 }
 
 function SaleDetail({ id, onClose }) {
