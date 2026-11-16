@@ -2,6 +2,7 @@ from datetime import timedelta
 
 from fastapi import APIRouter, Cookie, Depends, Header, Request, Response
 from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.api.deps import Ctx, get_ctx
@@ -14,7 +15,7 @@ from app.core.security import (
 from app.core.timeutil import utcnow
 from app.database import get_db
 from app.models import Device, User, UserSession
-from app.schemas.auth import ChangePasswordIn, LoginIn, LoginOut, TokenOut, UserOut
+from app.schemas.auth import ChangePasswordIn, LoginIn, LoginOut, TokenOut, UserOut, ChangeUsernameIn
 from app.schemas.common import Message
 from app.services.audit import write_audit
 
@@ -167,3 +168,22 @@ def change_password(body: ChangePasswordIn, ctx: Ctx = Depends(get_ctx), db: Ses
     write_audit(db, actor_id=ctx.user.id, action="PASSWORD_CHANGED", entity_type="user", entity_id=ctx.user.id)
     db.commit()
     return Message(message="Password changed.")
+
+@router.post("/change-username", response_model=UserOut)
+def change_username(body: ChangeUsernameIn, ctx: Ctx = Depends(get_ctx), db: Session = Depends(get_db)):
+    if not verify_password(body.password, ctx.user.password_hash):
+        raise AppError(403, "REAUTH_FAILED", "Password is incorrect.")
+    old, new = ctx.user.username, body.username
+    if new == old:
+        raise AppError(400, "USERNAME_UNCHANGED", "That is already your username.")
+    if db.scalar(select(User.id).where(User.username == new, User.id != ctx.user.id)) is not None:
+        raise AppError(409, "USERNAME_TAKEN", "That username is already in use.")
+    ctx.user.username = new
+    write_audit(db, actor_id=ctx.user.id, device_id=ctx.device.id if ctx.device else None, action="USERNAME_CHANGED",
+                entity_type="user", entity_id=ctx.user.id, before={"username": old}, after={"username": new})
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise AppError(409, "USERNAME_TAKEN", "That username is already in use.")
+    return ctx.user

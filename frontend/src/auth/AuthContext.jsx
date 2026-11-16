@@ -1,6 +1,12 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react"
 import { api, setAccessToken, setAuthHooks } from "@/api/client"
-import { clearOfflineSession, loadOfflineSession, saveOfflineSession, touchOfflineSession } from "@/offline/session"
+import {
+  clearOfflineSession,
+  loadOfflineSession,
+  saveOfflineSession,
+  touchOfflineSession,
+  updateOfflineUser,
+} from "@/offline/session";
 
 const AuthContext = createContext(null)
 export const useAuth = () => useContext(AuthContext)
@@ -122,6 +128,11 @@ export function AuthProvider({ children }) {
     clear(notice) // pending records stay in the outbox
   }, [clear])
 
+const updateUser = useCallback(async (user) => {
+  setState((s) => ({ ...s, user }));
+  await updateOfflineUser(user);
+}, []);
+
   // Sign out after 15 minutes without activity while online.
   useEffect(() => {
     if (!(state.status === "authed" && !state.offline)) return
@@ -135,9 +146,15 @@ export function AuthProvider({ children }) {
     return () => { events.forEach((e) => window.removeEventListener(e, reset)); clearTimeout(idle.current) }
   }, [state.status, state.offline, logout])
 
-  const value = useMemo(
-    () => ({ ...state, login, logout, hasRole: (...roles) => !!state.user && roles.includes(state.user.role) }),
-    [state, login, logout]
-  )
+    const value = useMemo(
+      () => ({
+        ...state,
+        login,
+        logout,
+        updateUser,
+        hasRole: (...roles) => !!state.user && roles.includes(state.user.role),
+      }),
+      [state, login, logout, updateUser],
+    );
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
 }

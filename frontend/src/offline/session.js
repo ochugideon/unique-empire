@@ -23,4 +23,9 @@ export async function loadOfflineSession() {
   }
 }
 
+export async function updateOfflineUser(user) {
+  const current = await loadOfflineSession();
+  if (current) await saveOfflineSession(user, current.expiresAt);
+}
+
 export const clearOfflineSession = () => delMeta("offlineSession")

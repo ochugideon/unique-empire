@@ -73,6 +73,9 @@ class UserUpdate(BaseModel):
     role: Role | None = None
     is_active: bool | None = None
 
+class ChangeUsernameIn(BaseModel):
+    username: Username
+    password: str = Field(max_length=200)
 
 class ResetPasswordIn(BaseModel):
     new_password: Password
